@@ -98,6 +98,9 @@ export default class Adapter {
         switch (data.object.type) {
           case "Note":
             return this.client.sendTextAsync(data.to.id, data.object.content);
+          case "Audio":
+          case "Video":
+            return this.client.sendTextAsync(data.to.id, data.object.url);
           default:
             throw new Error(`${data.object.type} not supported.`);
         }

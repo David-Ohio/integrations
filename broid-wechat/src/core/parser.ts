@@ -80,7 +80,7 @@ export default class Parser {
       "published": parseInt(normalized.createtime[0], 10),
       "target": {
         id: normalized.tousername[0],
-        name: normalized.tousername[0],
+        name: normalized.tousername[0], // TODO Name not here
         type: "Person", // TODO Test
       },
       "type": "Create",
