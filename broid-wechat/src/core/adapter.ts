@@ -1,5 +1,5 @@
 import * as Promise from "bluebird";
-import broidSchemas from "broid-schemas";
+import broidSchemas, { ISendParameters } from "broid-schemas";
 import { Logger } from "broid-utils";
 import * as uuid from "node-uuid";
 import { Observable } from "rxjs/Rx";
@@ -93,16 +93,15 @@ export default class Adapter {
   public send(data: ISendParameters): Promise<Object | Error> {
     this.logger.debug("sending", { message: data });
 
-    // return broidSchemas(data, "send")
-      // .then(() => {
-        // const message: string = data.object.content;
-        // let to: string = data.to.id;
-        // if (data.to.type === "Group" && !to.includes("#")) {
-          // to = `#${to}`;
-        // }
-        // this.client.say(to, message);
-
-        // return { type: "sent", serviceID: this.serviceId() };
-      // });
+    return broidSchemas(data, "send")
+      .then(() => {
+        switch (data.object.type) {
+          case "Note":
+            return this.client.sendTextAsync(data.to.id, data.object.content);
+          default:
+            throw new Error(`${data.object.type} not supported.`);
+        }
+      })
+      .then(() => ({ type: "sent", serviceID: this.serviceId() }));
   }
 }
