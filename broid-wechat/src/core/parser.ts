@@ -1,24 +1,20 @@
 import * as Promise from "bluebird";
-import broidSchemas, { IActivityStream, IASObject } from "broid-schemas";
+import broidSchemas, { IActivityStream } from "broid-schemas";
 import { cleanNulls, Logger } from "broid-utils";
-import * as uuid from "node-uuid";
 import * as R from "ramda";
 
-import { IActivityStream } from "./interfaces";
-
 export default class Parser {
-  // TODO Sort
-  public serviceID: string;
   public generatorName: string;
+  public serviceID: string;
   private logger: Logger;
-  private username: string;
+  private userCache: Object;
   private wechatClient: any;
 
-  constructor(username: string, wechatClient: any, serviceID: string, logLevel: string) {
-    this.serviceID = serviceID;
+  constructor(wechatClient: any, serviceID: string, logLevel: string) {
     this.generatorName = "wechat";
-    this.username = username;
+    this.serviceID = serviceID;
     this.logger = new Logger("parser", logLevel);
+    this.userCache = {};
     this.wechatClient = wechatClient;
   }
 
@@ -43,7 +39,7 @@ export default class Parser {
   }
 
   // Convert normalized data to Broid schema
-  public parse(event: Object | null): Promise<IActivityStream | null> {
+  public parse(event: Object): Promise<IActivityStream | null> {
     this.logger.debug("Normalized process");
 
     const normalized = cleanNulls(event);
@@ -55,74 +51,90 @@ export default class Parser {
       case "text":
         return this.parseText(normalized);
       case "video":
-        return this.parseMultiMedia(normalized, "video");
+        return this.parseMultiMedia(normalized, "Video");
       case "voice":
-        return this.parseMultiMedia(normalized, "audio");
+        return this.parseMultiMedia(normalized, "Audio");
       default:
         return Promise.resolve(null);
     }
   }
 
-  private createActivityStream(normalized: any): IActivityStream {
-    const message: IActivityStream = {
-      "@context": "https://www.w3.org/ns/activitystreams",
-      "actor": {
-        id: normalized.fromusername[0],
-        name: normalized.fromusername[0],
-        type: "Person",
-      },
-      "generator": {
-        id: this.serviceID,
-        name: this.generatorName,
-        type: "Service",
-      },
-      "object": {},
-      "published": parseInt(normalized.createtime[0], 10),
-      "target": {
-        id: normalized.tousername[0],
-        name: normalized.tousername[0], // TODO Name not here
-        type: "Person", // TODO Test
-      },
-      "type": "Create",
-    };
+  private getUserName(openid: string): Promise<String> {
+    if (this.userCache[openid]) {
+      return Promise.resolve(this.userCache[openid]);
+    }
 
-    return message;
+    return this.wechatClient.getUserAsync(openid)
+      .then(({nickname}) => {
+        this.userCache[openid] = nickname;
+        return nickname;
+      });
+  }
+
+  private createActivityStream(normalized: any): Promise<IActivityStream> {
+    return this.getUserName(normalized.fromusername[0])
+      .then((nickname: string) => {
+        const message: IActivityStream = {
+          "@context": "https://www.w3.org/ns/activitystreams",
+          "actor": {
+            id: normalized.fromusername[0],
+            name: nickname,
+            type: "Person",
+          },
+          "generator": {
+            id: this.serviceID,
+            name: this.generatorName,
+            type: "Service",
+          },
+          "object": {},
+          "published": parseInt(normalized.createtime[0], 10),
+          "target": {
+            id: normalized.tousername[0],
+            name: normalized.tousername[0],
+            type: "Person",
+          },
+          "type": "Create",
+        };
+
+        return message;
+      });
   }
 
   private parseImage(normalized: any): Promise<IActivityStream> {
-    const message: IActivityStream = this.createActivityStream(normalized);
-    const messageObject: IASObject = {
-      id: normalized.msgid[0],
-      type: "Image",
-      url: normalized.picurl[0],
-    };
-    message.object = messageObject;
-
-    return Promise.resolve(message);
+    return this.createActivityStream(normalized)
+      .then((message: IActivityStream) => {
+        message.object = {
+          id: normalized.msgid[0],
+          type: "Image",
+          url: normalized.picurl[0],
+        };
+        return message;
+      });
   }
 
   private parseText(normalized: any): Promise<IActivityStream> {
-    const message: IActivityStream = this.createActivityStream(normalized);
-    const messageObject: IASObject = {
-      content: normalized.content[0],
-      id: normalized.msgid[0],
-      type: "Note",
-    };
-    message.object = messageObject;
-
-    return Promise.resolve(message);
+    return this.createActivityStream(normalized)
+      .then((message: IActivityStream) => {
+        message.object = {
+          content: normalized.content[0],
+          id: normalized.msgid[0],
+          type: "Note",
+        };
+        return message;
+      });
   }
 
   private parseMultiMedia(normalized: any, messageType: string): Promise<IActivityStream> {
-   return this.wechatClient.getLatestTokenAsync()
-      .then(({accessToken}) => {
-        const message: IActivityStream = this.createActivityStream(normalized);
-        const messageObject: IASObject = {
+    const getAccessToken = this.wechatClient.getLatestTokenAsync()
+      .then(R.prop("accessToken"));
+
+    return Promise.join(getAccessToken, this.createActivityStream(normalized))
+      .spread((accessToken: string, message: IActivityStream) => {
+        message.object = {
           id: normalized.msgid[0],
           type: messageType,
           url: `http://file.api.wechat.com/cgi-bin/media/get?access_token=${accessToken}&media_id=${normalized.mediaid[0]}`,
         };
-        message.object = messageObject;
 
         return message;
       });
